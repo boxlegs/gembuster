@@ -160,6 +160,12 @@ func isWhitelisted(status string, codes []string) bool {
     return false
 }
 
+// TODO: Implement Job struct for tracking recursion depth + any other deets we might need
+// type Job struct {
+//     URI   string
+//     Depth int
+// }
+
 func main() {
     cfg, err := parseConfig()
     if err != nil {
@@ -198,7 +204,7 @@ func main() {
         close(jobs)
     }()
 
-    // Run workers
+
     var workers int = cfg.Threads
 
     // Use a wait counter via channel
@@ -214,11 +220,8 @@ func main() {
                 
 
                 if strings.HasPrefix(status, "3") {
-                    // Handle redirects if needed
-                    status, _, size, _ := fetchGeminiOnce(u + "/", cfg.Timeout, cfg.Insecure)
-                    if isWhitelisted(status, cfg.Codes) {
-                        fmt.Printf("%s\t\t[Status %s]\tSize: %d\n", u+"/", status, size)
-                    }
+                    // TODO: Handle redirect -> needs the whole header
+                    // Similarly if we hit a directory listing we need another worker queue
                     continue
                 } 
 
