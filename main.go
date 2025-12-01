@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -26,6 +27,7 @@ type Config struct {
 	Spider      bool          // Spider links on page. Default = true
 	Insecure    bool          // Allow self-signed TLS connections
 	Verbose     bool          // Verb logging
+	Debug       bool          // Debug logging
 	FilterCodes []string      // whitelisted gemini status codes
 	FilterSize  int           // whitelisted gemini status codes
 }
@@ -47,8 +49,9 @@ func parseConfig() (*Config, error) {
 	flag.IntVar(&cfg.FilterSize, "s", -1, "Filter out requests of a given size (in bytes)")
 	flag.BoolVar(&cfg.Spider, "spider", true, "Spider links on page")
 	flag.BoolVar(&cfg.Insecure, "k", true, "Allow insecure TLS connections (defaults to true)")
-	flag.StringVar(&FilterCodes, "c", "2*,3*", "Comma-separated list of whitelisted status codes. Supports wildcards (e.g., 2* for all 2x codes)")
+	flag.StringVar(&FilterCodes, "c", "2,3", "Comma-separated list of whitelisted status codes. Supports wildcards (e.g., 2 for all 2x codes)")
 	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose logging")
+	flag.BoolVar(&cfg.Debug, "d", false, "Enable debug logging")
 	flag.Parse()
 
 	if cfg.Threads <= 0 {
@@ -64,6 +67,21 @@ func parseConfig() (*Config, error) {
 	if !strings.HasPrefix(cfg.BaseURL, "gemini://") {
 		cfg.BaseURL = "gemini://" + cfg.BaseURL
 	}
+
+	// Set logging level
+	var level slog.LevelVar
+	level.Set(slog.LevelWarn)
+
+	if cfg.Verbose {
+		level.Set(slog.LevelInfo)
+	}
+	if cfg.Debug {
+		level.Set(slog.LevelDebug)
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &level})))
+
+	slog.Warn("hi", "config", &level)
 
 	return cfg, nil
 }
@@ -91,7 +109,7 @@ func parseWordlist(path string) ([]string, error) {
 
 func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (status string, meta string, size int64, err error) {
 
-	// TODO: Offload to logging fmt.Printf("Fetching: %s\n", rawURL)
+	slog.Debug("Fetching URL", "url", rawURL)
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", "", 0, err
@@ -141,18 +159,13 @@ func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (statu
 
 func isWhitelisted(status string, codes []string) bool {
 
-	if status == "" {
-		return false
-	}
-
 	for _, pattern := range codes {
 		p := strings.TrimSpace(pattern)
-		if p == "*" {
+		if p == "all" {
 			return true
 		}
-		if strings.HasSuffix(p, "*") { // Wildcard e.g. 2*, 3*
-			prefix := strings.TrimSuffix(p, "*")
-			if strings.HasPrefix(status, prefix) {
+		if len(p) == 1 { // Wildcard e.g. 2x, 3x
+			if strings.HasPrefix(status, p) {
 				return true
 			}
 			continue
@@ -172,6 +185,7 @@ type Job struct {
 }
 
 func main() {
+
 	cfg, err := parseConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing config: %v\n", err)
@@ -187,6 +201,7 @@ func main() {
 	fmt.Printf("Starting Gemini directory busting on %s with %d threads\n", cfg.BaseURL, cfg.Threads)
 	fmt.Printf("Loaded %d words from wordlist\n", len(wordlist))
 
+	slog.Debug("Attempting heartbeat", "URL", cfg.BaseURL)
 	u, _ := url.Parse(cfg.BaseURL)
 	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(cfg.Port))
 	baseURL := u
