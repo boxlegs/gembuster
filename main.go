@@ -104,6 +104,7 @@ func parseWordlist(path string) ([]string, error) {
 			return nil, err
 		}
 	}
+
 	return wordlist, nil
 }
 
@@ -198,8 +199,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Starting Gemini directory busting on %s with %d threads\n", cfg.BaseURL, cfg.Threads)
-	fmt.Printf("Loaded %d words from wordlist\n", len(wordlist))
+	fmt.Printf("Started Gemini directory busting on %s with %d threads\n", cfg.BaseURL, cfg.Threads)
+	fmt.Printf("Loaded %d words from wordlist\n\n", len(wordlist))
 
 	slog.Debug("Attempting heartbeat", "URL", cfg.BaseURL)
 	u, _ := url.Parse(cfg.BaseURL)
@@ -240,6 +241,7 @@ func main() {
 			for job := range jobs {
 
 				u := job.URL
+				depth := job.Depth
 				status, meta, size, err := fetchGeminiOnce(u, cfg.Timeout, cfg.Insecure)
 				if err != nil && cfg.Verbose {
 					fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", u, err)
@@ -249,22 +251,23 @@ func main() {
 				if isWhitelisted(status, cfg.FilterCodes) && (int(size) != cfg.FilterSize) {
 
 					rawURL, _ := url.Parse(u)
+
+					// Redirect
 					if strings.HasPrefix(status, "3") {
 						redirURL, _ := url.Parse(meta)
 						fmt.Printf("%s\t\t[Status %s]\t%s -> %s\t\tSize: %d\n", rawURL.Path, status, rawURL.Path, redirURL.Path, size)
 					} else {
 						fmt.Printf("%s\t\t[Status %s]\t%s\t\tSize: %d\n", rawURL.Path, status, meta, size)
 					}
+
+					// If directory, recurse if not at max depth
+					if strings.HasPrefix(status, "2") && strings.HasSuffix(u, "/") && depth < cfg.Recursive {
+						// Enqueue new job
+						slog.Info("Hit new directory", "url", u, "depth", depth)
+
+						// TODO: Decide where or not to add recursion. Will require job/queue rework
+					}
 				}
-
-				// TODO: Fix this by using WaitGroup and prio queue
-				// Recurse if a) directory listing b) current depth < cfg.Recursive level or c) spidering links
-				// if cfg.Recursive > 0 && !strings.HasSuffix(u, "/") {
-				//     jobs <- u + "/"
-				// }
-
-				// TODO: Implement per-status/family stats
-
 			}
 			doneWorkers <- struct{}{}
 		}()
