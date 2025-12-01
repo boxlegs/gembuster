@@ -47,7 +47,7 @@ func parseConfig() (*Config, error) {
 	flag.IntVar(&cfg.FilterSize, "s", -1, "Filter out requests of a given size (in bytes)")
 	flag.BoolVar(&cfg.Spider, "spider", true, "Spider links on page")
 	flag.BoolVar(&cfg.Insecure, "k", true, "Allow insecure TLS connections (defaults to true)")
-	flag.StringVar(&FilterCodes, "codes", "2*,3*", "Comma-separated list of whitelisted status codes. Supports wildcards (e.g., 2* for all 2x codes)")
+	flag.StringVar(&FilterCodes, "c", "2*,3*", "Comma-separated list of whitelisted status codes. Supports wildcards (e.g., 2* for all 2x codes)")
 	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose logging")
 	flag.Parse()
 
