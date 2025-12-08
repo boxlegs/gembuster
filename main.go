@@ -111,6 +111,7 @@ func parseWordlist(path string) ([]string, error) {
 func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (status string, meta string, size int64, err error) {
 
 	slog.Debug("Fetching URL", "url", rawURL)
+
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", "", 0, err
@@ -121,17 +122,18 @@ func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (statu
 		ServerName:         u.Hostname(),
 		InsecureSkipVerify: insecure,
 	})
+
 	if err != nil {
 		fmt.Printf("%s\n", err)
 		return "", "", 0, err
 	}
 	defer conn.Close()
 
-	// Send request line: full URL + CRLF
 	if _, err := conn.Write([]byte(rawURL + "\r\n")); err != nil {
 		return "", "", 0, err
 	}
 
+	// Read in response header
 	r := bufio.NewReader(conn)
 	header, err := r.ReadString('\n')
 	if err != nil {
@@ -149,10 +151,10 @@ func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (statu
 		meta = parts[1]
 	}
 
-	// Count body bytes regardless of status; many servers send body only on 2x.
-	n, err := io.Copy(io.Discard, r)
+	// TODO: Add filtering based on body content
+
+	n, err := io.Copy(io.Discard, r) // Discard body
 	if err != nil {
-		// Body read errors shouldn't hide header info; return partial
 		return status, meta, n, err
 	}
 	return status, meta, n, nil
@@ -179,6 +181,8 @@ func isWhitelisted(status string, codes []string) bool {
 	}
 	return false
 }
+
+// TODO: Use dependency injection for fuzzing
 
 type Job struct {
 	URL   string
@@ -208,8 +212,6 @@ func main() {
 	baseURL := u
 
 	fmt.Printf("Using base URL: %s\n\n", baseURL.String())
-
-	// TODO: Add initial host-up check for quick aborts
 
 	jobs := make(chan Job, len(wordlist))
 	done := make(chan struct{})
