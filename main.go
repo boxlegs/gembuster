@@ -22,7 +22,7 @@ type Config struct {
 	Threads     int           // Number of concurrent threads - default is 10
 	Timeout     time.Duration // Request timeout
 	Port        int           // Port to use for Gemini requests
-	Extension   bool          // Whether to append .gmi extension
+	Extensions  []string      // Comma-separated list of extensions to append to each word
 	Recursive   int           // Level of recursion on directory hit
 	Spider      bool          // Spider links on page. Default = true
 	Insecure    bool          // Allow self-signed TLS connections
@@ -37,6 +37,7 @@ func parseConfig() (*Config, error) {
 
 	var timeoutSec int
 	var FilterCodes string
+	var Extensions string
 
 	cfg := &Config{}
 
@@ -52,7 +53,7 @@ func parseConfig() (*Config, error) {
 	fs.StringVar(&cfg.Wordlist, "w", "", "Path to wordlist file")
 	fs.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
 	fs.IntVar(&timeoutSec, "timeout", 10, "Request timeout duration (seconds)")
-	fs.BoolVar(&cfg.Extension, "x", false, "Append .gmi extension to each word")
+	fs.StringVar(&Extensions, "x", "gmi", "Comma-separated list of extensions to append to each word")
 	fs.IntVar(&cfg.Recursive, "r", 2, "Recursion level for directories")
 	fs.IntVar(&cfg.Port, "p", 1965, "Port to use for Gemini requests")
 	fs.IntVar(&cfg.FilterSize, "s", -1, "Filter out requests of a given size (in bytes)")
@@ -72,6 +73,10 @@ func parseConfig() (*Config, error) {
 	// Parse only after the first positional arg
 	if err := fs.Parse(os.Args[2:]); err != nil {
 		return nil, err
+	}
+
+	if len(Extensions) > 0 {
+		cfg.Extensions = strings.Split(Extensions, ",")
 	}
 
 	switch cfg.Mode {
@@ -220,12 +225,23 @@ func vhostURLGen(base *url.URL, word string) *url.URL {
 	return &u
 }
 
-func buildURLs(base *url.URL, wordlist []string, gen URLGen) []Job {
+func buildURLs(base *url.URL, wordlist []string, gen URLGen, extensions []string) []Job {
 	var jobs []Job
 	for _, w := range wordlist {
 
 		if u := gen(base, w); u != nil {
 			jobs = append(jobs, Job{URL: u.String(), Depth: 0})
+
+		}
+
+		// For each extension provided
+		if len(extensions) > 0 {
+			fmt.Printf("Hello %s", extensions[0])
+			for _, ext := range extensions {
+				if u := gen(base, w+"."+strings.Trim(ext, ".")); u != nil {
+					jobs = append(jobs, Job{URL: u.String(), Depth: 0})
+				}
+			}
 		}
 	}
 
@@ -286,12 +302,9 @@ func main() {
 		urlGen = dirURLGen
 	case "vhost":
 		urlGen = vhostURLGen
-	default:
-		fmt.Fprintf(os.Stderr, "Unsupported mode: %s\n", cfg.Mode)
-		os.Exit(1)
 	}
 
-	seedJobs := buildURLs(baseURL, wordlist, urlGen)
+	seedJobs := buildURLs(baseURL, wordlist, urlGen, cfg.Extensions)
 	go func() {
 		for _, j := range seedJobs {
 			jobs <- j
