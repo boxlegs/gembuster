@@ -30,6 +30,7 @@ type Config struct {
 	Debug       bool          // Debug logging
 	FilterCodes []string      // whitelisted gemini status codes
 	FilterSize  int           // whitelisted gemini status codes
+	Mode        string        // Fuzzing mode: subdir, subdomain, query
 }
 
 func parseConfig() (*Config, error) {
@@ -39,20 +40,46 @@ func parseConfig() (*Config, error) {
 
 	cfg := &Config{}
 
-	flag.StringVar(&cfg.BaseURL, "u", "", "Base Gemini URL with/without protocol wrapper (e.g., gemini://example.com)")
-	flag.StringVar(&cfg.Wordlist, "w", "", "Path to wordlist file")
-	flag.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
-	flag.IntVar(&timeoutSec, "timeout", 10, "Request timeout duration")
-	flag.BoolVar(&cfg.Extension, "x", false, "Append .gmi extension to each word")
-	flag.IntVar(&cfg.Recursive, "r", 2, "Recursion level for directories")
-	flag.IntVar(&cfg.Port, "p", 1965, "Port to use for Gemini requests")
-	flag.IntVar(&cfg.FilterSize, "s", -1, "Filter out requests of a given size (in bytes)")
-	flag.BoolVar(&cfg.Spider, "spider", true, "Spider links on page")
-	flag.BoolVar(&cfg.Insecure, "k", true, "Allow insecure TLS connections (defaults to true)")
-	flag.StringVar(&FilterCodes, "c", "2,3", "Comma-separated list of whitelisted status codes. Supports wildcards (e.g., 2 for all 2x codes)")
-	flag.BoolVar(&cfg.Verbose, "v", false, "Enable verbose logging")
-	flag.BoolVar(&cfg.Debug, "d", false, "Enable debug logging")
-	flag.Parse()
+	if len(os.Args) < 2 {
+		return nil, fmt.Errorf("usage: %s <mode> [flags]", os.Args[0])
+	}
+
+	cfg.Mode = strings.ToLower(os.Args[1])
+	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	fs.StringVar(&cfg.BaseURL, "u", "", "Base Gemini URL (e.g., gemini://example.com)")
+	fs.StringVar(&cfg.Wordlist, "w", "", "Path to wordlist file")
+	fs.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
+	fs.IntVar(&timeoutSec, "timeout", 10, "Request timeout duration (seconds)")
+	fs.BoolVar(&cfg.Extension, "x", false, "Append .gmi extension to each word")
+	fs.IntVar(&cfg.Recursive, "r", 2, "Recursion level for directories")
+	fs.IntVar(&cfg.Port, "p", 1965, "Port to use for Gemini requests")
+	fs.IntVar(&cfg.FilterSize, "s", -1, "Filter out requests of a given size (in bytes)")
+	fs.BoolVar(&cfg.Spider, "spider", true, "Spider links on page")
+	fs.BoolVar(&cfg.Insecure, "k", true, "Allow insecure TLS connections")
+	fs.StringVar(&FilterCodes, "c", "2,3", "Comma-separated whitelisted status codes (supports wildcards)")
+	fs.BoolVar(&cfg.Verbose, "v", false, "Enable verbose logging")
+	fs.BoolVar(&cfg.Debug, "d", false, "Enable debug logging")
+
+	// Custom usage showing positional mode
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s <mode> [flags]\n", os.Args[0])
+		fmt.Fprintln(os.Stderr, "Modes: dir, vhost, query")
+		fs.PrintDefaults()
+	}
+
+	// Parse only after the first positional arg
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		return nil, err
+	}
+
+	switch cfg.Mode {
+	case "dir", "vhost", "query":
+	default:
+		fs.Usage()
+		return nil, fmt.Errorf("unsupported mode: %s", cfg.Mode)
+	}
 
 	if cfg.Threads <= 0 {
 		return nil, fmt.Errorf("threads must be > 0")
@@ -68,7 +95,6 @@ func parseConfig() (*Config, error) {
 		cfg.BaseURL = "gemini://" + cfg.BaseURL
 	}
 
-	// Set logging level
 	var level slog.LevelVar
 	level.Set(slog.LevelWarn)
 
@@ -78,11 +104,7 @@ func parseConfig() (*Config, error) {
 	if cfg.Debug {
 		level.Set(slog.LevelDebug)
 	}
-
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: &level})))
-
-	slog.Warn("hi", "config", &level)
-
 	return cfg, nil
 }
 
@@ -108,7 +130,7 @@ func parseWordlist(path string) ([]string, error) {
 	return wordlist, nil
 }
 
-func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (status string, meta string, size int64, err error) {
+func fetchGeminiOnce(rawURL string, baseURL *url.URL, timeout time.Duration, insecure bool) (status string, meta string, size int64, err error) {
 
 	slog.Debug("Fetching URL", "url", rawURL)
 
@@ -118,7 +140,7 @@ func fetchGeminiOnce(rawURL string, timeout time.Duration, insecure bool) (statu
 	}
 
 	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := tls.DialWithDialer(dialer, "tcp", u.Host, &tls.Config{
+	conn, err := tls.DialWithDialer(dialer, "tcp", baseURL.Host, &tls.Config{
 		ServerName:         u.Hostname(),
 		InsecureSkipVerify: insecure,
 	})
@@ -182,11 +204,53 @@ func isWhitelisted(status string, codes []string) bool {
 	return false
 }
 
-// TODO: Use dependency injection for fuzzing
+// Template for URL generators (e.g. subdir,subdomain,query)
+type URLGen func(base *url.URL, word string) *url.URL
+
+func dirURLGen(base *url.URL, word string) *url.URL {
+	u := *base
+	u.Path = path.Join(base.Path, word)
+	return &u
+}
+
+func vhostURLGen(base *url.URL, word string) *url.URL {
+	u := *base
+	host := word + "." + base.Hostname()
+	u.Host = net.JoinHostPort(host, strings.Split(u.Host, ":")[1])
+	return &u
+}
+
+func buildURLs(base *url.URL, wordlist []string, gen URLGen) []Job {
+	var jobs []Job
+	for _, w := range wordlist {
+
+		if u := gen(base, w); u != nil {
+			jobs = append(jobs, Job{URL: u.String(), Depth: 0})
+		}
+	}
+
+	slog.Debug("Built URLs", "count", len(jobs))
+
+	return jobs
+}
 
 type Job struct {
 	URL   string
 	Depth int
+}
+
+func formatOutputPart(u *url.URL, mode string) string {
+	switch strings.ToLower(mode) {
+	case "vhost":
+		return u.Hostname()
+	case "dir":
+		fallthrough
+	default:
+		if u.Path == "" {
+			return "/"
+		}
+		return u.Path
+	}
 }
 
 func main() {
@@ -216,23 +280,24 @@ func main() {
 	jobs := make(chan Job, len(wordlist))
 	done := make(chan struct{})
 
+	var urlGen URLGen
+	switch cfg.Mode {
+	case "dir":
+		urlGen = dirURLGen
+	case "vhost":
+		urlGen = vhostURLGen
+	default:
+		fmt.Fprintf(os.Stderr, "Unsupported mode: %s\n", cfg.Mode)
+		os.Exit(1)
+	}
+
+	seedJobs := buildURLs(baseURL, wordlist, urlGen)
 	go func() {
-		for _, w := range wordlist {
-
-			// Clone the parsed base URL and set the path for this job.
-			v := *baseURL
-			v.Path = path.Join(baseURL.Path, w)
-
-			if cfg.Extension {
-				v.Path = v.Path + ".gmi"
-				jobs <- Job{URL: v.String(), Depth: 0}
-			} else {
-				jobs <- Job{URL: v.String(), Depth: 0}
-			}
+		for _, j := range seedJobs {
+			jobs <- j
 		}
 		close(jobs)
 	}()
-
 	var workers int = cfg.Threads
 
 	// Use a wait counter via channel
@@ -244,22 +309,19 @@ func main() {
 
 				u := job.URL
 				depth := job.Depth
-				status, meta, size, err := fetchGeminiOnce(u, cfg.Timeout, cfg.Insecure)
+				status, meta, size, err := fetchGeminiOnce(u, baseURL, cfg.Timeout, cfg.Insecure)
 				if err != nil && cfg.Verbose {
 					fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", u, err)
 				}
 
 				// Print output to stdout
 				if isWhitelisted(status, cfg.FilterCodes) && (int(size) != cfg.FilterSize) {
-
 					rawURL, _ := url.Parse(u)
-
-					// Redirect
 					if strings.HasPrefix(status, "3") {
 						redirURL, _ := url.Parse(meta)
 						fmt.Printf("%s\t\t[Status %s]\t%s -> %s\t\tSize: %d\n", rawURL.Path, status, rawURL.Path, redirURL.Path, size)
 					} else {
-						fmt.Printf("%s\t\t[Status %s]\t%s\t\tSize: %d\n", rawURL.Path, status, meta, size)
+						fmt.Printf("%s\t\t[Status %s]\t%s\t\tSize: %d\n", formatOutputPart(rawURL, cfg.Mode), status, meta, size)
 					}
 
 					// If directory, recurse if not at max depth
