@@ -236,7 +236,6 @@ func buildURLs(base *url.URL, wordlist []string, gen URLGen, extensions []string
 
 		// For each extension provided
 		if len(extensions) > 0 {
-			fmt.Printf("Hello %s", extensions[0])
 			for _, ext := range extensions {
 				if u := gen(base, w+"."+strings.Trim(ext, ".")); u != nil {
 					jobs = append(jobs, Job{URL: u.String(), Depth: 0})
