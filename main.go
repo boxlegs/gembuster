@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 type Config struct {
@@ -53,7 +55,7 @@ func parseConfig() (*Config, error) {
 	fs.StringVar(&cfg.Wordlist, "w", "", "Path to wordlist file")
 	fs.IntVar(&cfg.Threads, "t", 10, "Number of concurrent threads")
 	fs.IntVar(&timeoutSec, "timeout", 10, "Request timeout duration (seconds)")
-	fs.StringVar(&Extensions, "x", "gmi", "Comma-separated list of extensions to append to each word")
+	fs.StringVar(&Extensions, "x", "", "Comma-separated list of extensions to append to each word")
 	fs.IntVar(&cfg.Recursive, "r", 2, "Recursion level for directories")
 	fs.IntVar(&cfg.Port, "p", 1965, "Port to use for Gemini requests")
 	fs.IntVar(&cfg.FilterSize, "s", -1, "Filter out requests of a given size (in bytes)")
@@ -80,7 +82,9 @@ func parseConfig() (*Config, error) {
 	}
 
 	switch cfg.Mode {
-	case "dir", "vhost", "query":
+	case "vhost", "query":
+	case "dir": // Add default .gmi extension when dirbusting
+		cfg.Extensions = append(cfg.Extensions, "gmi")
 	default:
 		fs.Usage()
 		return nil, fmt.Errorf("unsupported mode: %s", cfg.Mode)
@@ -234,7 +238,7 @@ func buildURLs(base *url.URL, wordlist []string, gen URLGen, extensions []string
 
 		}
 
-		// For each extension provided
+		// For each extension provided.
 		if len(extensions) > 0 {
 			for _, ext := range extensions {
 				if u := gen(base, w+"."+strings.Trim(ext, ".")); u != nil {
@@ -249,12 +253,29 @@ func buildURLs(base *url.URL, wordlist []string, gen URLGen, extensions []string
 	return jobs
 }
 
-type Job struct {
-	URL   string
-	Depth int
+func formatStatusCode(code string) func(string, ...interface{}) string {
+
+	var formatted func(string, ...interface{}) string
+
+	switch code[0] {
+	case '1':
+		formatted = color.BlueString
+	case '2':
+		formatted = color.GreenString
+	case '3':
+		formatted = color.YellowString
+	case '4':
+		formatted = color.RedString
+	case '5':
+		formatted = color.RedString
+	default:
+		formatted = color.WhiteString
+	}
+
+	return formatted
 }
 
-func formatOutputPart(u *url.URL, mode string) string {
+func formatOutput(u *url.URL, mode string) string {
 	switch strings.ToLower(mode) {
 	case "vhost":
 		return u.Hostname()
@@ -266,6 +287,11 @@ func formatOutputPart(u *url.URL, mode string) string {
 		}
 		return u.Path
 	}
+}
+
+type Job struct {
+	URL   string
+	Depth int
 }
 
 func main() {
@@ -294,6 +320,9 @@ func main() {
 
 	jobs := make(chan Job, len(wordlist))
 	done := make(chan struct{})
+
+	// Setup Output Formatting
+	bold := color.New(color.Bold).SprintFunc()
 
 	var urlGen URLGen
 	switch cfg.Mode {
@@ -326,15 +355,22 @@ func main() {
 					fmt.Fprintf(os.Stderr, "Error fetching %s: %v\n", u, err)
 				}
 
-				// Print output to stdout
 				if isWhitelisted(status, cfg.FilterCodes) && (int(size) != cfg.FilterSize) {
 					rawURL, _ := url.Parse(u)
+					var outputURL = formatOutput(rawURL, cfg.Mode)
+
+					// Redirect logic
 					if strings.HasPrefix(status, "3") {
 						redirURL, _ := url.Parse(meta)
-						fmt.Printf("%s\t\t[Status %s]\t%s -> %s\t\tSize: %d\n", rawURL.Path, status, rawURL.Path, redirURL.Path, size)
-					} else {
-						fmt.Printf("%s\t\t[Status %s]\t%s\t\tSize: %d\n", formatOutputPart(rawURL, cfg.Mode), status, meta, size)
+						outputURL = fmt.Sprintf("%s -> %s", formatOutput(rawURL, cfg.Mode), formatOutput(redirURL, cfg.Mode))
 					}
+
+					// Print row to stdout with padding
+					fmt.Printf("%-6s %-*s Size: %-6d %s\n",
+						bold(formatStatusCode(status)(fmt.Sprintf("[%s]", status))),
+						30, outputURL,
+						size,
+						meta)
 
 					// If directory, recurse if not at max depth
 					if strings.HasPrefix(status, "2") && strings.HasSuffix(u, "/") && depth < cfg.Recursive {
