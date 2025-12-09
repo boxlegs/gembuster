@@ -294,13 +294,6 @@ type Job struct {
 	Depth int
 }
 
-type OutRow struct {
-	Key    string
-	Status string // plain status like "[51]" (used for alignment)
-	Meta   string
-	Size   int64
-}
-
 func main() {
 
 	cfg, err := parseConfig()
