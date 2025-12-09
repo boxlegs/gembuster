@@ -341,11 +341,9 @@ func main() {
 	}()
 	var workers int = cfg.Threads
 
-	// Use a wait counter via channel
 	doneWorkers := make(chan struct{}, workers)
 	for i := 0; i < workers; i++ {
 		go func() {
-			// Each worker consumes jobs; if whitelisted, it can enqueue follow-ups.
 			for job := range jobs {
 
 				u := job.URL
