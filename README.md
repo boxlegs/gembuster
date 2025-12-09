@@ -4,6 +4,10 @@ I'm a big fan of the {dir,go,ferox}buster tools. I love them. They work a treat.
 Both subdirectory and vhost/subdomain enumeration are supported.
 
 ```sh
+# Install
+go install github.com/boxlegs/gembuster@latest
+
+# Basic Usage
 gembuster [dir | vhost] -u geminiserver.com -w raft-common-directories-blah.txt
 ```
 
