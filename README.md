@@ -10,4 +10,4 @@ go install github.com/boxlegs/gembuster@latest
 # Basic Usage
 gembuster [dir | vhost] -u geminiserver.com -w raft-common-directories-blah.txt
 ```
-
+Remember to point this *only* at servers you own/are authorised to.
